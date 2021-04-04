@@ -8,6 +8,7 @@
 #include <Protocol/DiskIo2.h>
 #include <Protocol/BlockIo.h>
 #include <Guid/FileInfo.h>
+#include "frame_buffer_config.hpp"
 
 // gBS: ブートサービス（グローバル変数）
 // gRT: ランタイムサービス（グローバル変数）
@@ -226,12 +227,8 @@ EFI_STATUS EFIAPI UefiMain (EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *system_ta
   }
 
   Print(L"Resolution: %ux%u, Pixel Format: %s, %u pixels/line\n",
-    gop->Mode->FrameBufferBase, gop->Mode->FrameBufferBase + gop->Mode->FrameBufferSize, gop->Mode->FrameBufferSize);
-
-  UINT8* frame_buffer = (UINT8*)gop->Mode->FrameBufferBase;
-  for (UINTN i = 0; i < gop->Mode->FrameBufferSize; i++) {
-    frame_buffer[i] = 255;
-  }
+    gop->Mode->Info->HorizontalResolution, gop->Mode->Info->VerticalResolution, GetPixelFormatUnicode(gop->Mode->Info->PixelFormat), gop->Mode->Info->PixelsPerScanLine);
+  Print(L"Frame Buffer: 0x%0lx - 0x%0lx, Size: %lu bytes\n", gop->Mode->FrameBufferBase, gop->Mode->FrameBufferBase + gop->Mode->FrameBufferSize, gop->Mode->FrameBufferSize);
 
   /* カーネル(kernel/main.cpp)の読み込み */
   Print(L"Loading kernel.elf ");
@@ -290,9 +287,29 @@ EFI_STATUS EFIAPI UefiMain (EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *system_ta
   /* カーネルの起動 */
   UINT64 entry_addr = *(UINT64*)(kernel_base_addr + 24);
 
-  typedef void EntryPointType(UINT64, UINT64);
+  // 描画に必要な情報をカーネルに渡す
+  struct FrameBufferConfig config = {
+    (UINT8*)gop->Mode->FrameBufferBase,
+    gop->Mode->Info->PixelsPerScanLine,
+    gop->Mode->Info->HorizontalResolution,
+    gop->Mode->Info->VerticalResolution,
+    0
+  };
+  switch (gop->Mode->Info->PixelFormat) {
+    case PixelRedGreenBlueReserved8BitPerColor:
+      config.pixel_format = kPixelRGBResv8BitPerColor;
+      break;
+    case PixelBlueGreenRedReserved8BitPerColor:
+      config.pixel_format = kPixelBGRResv8BitPerColor;
+      break;
+    default:
+      Print(L"[ERR B13 Lv.3] Unimplemented pexel format: %d\n", gop->Mode->Info->PixelFormat);
+      Halt();
+  }
+
+  typedef void EntryPointType(const struct FrameBufferConfig*);
   EntryPointType* entry_point = (EntryPointType*)entry_addr;
-  entry_point(gop->Mode->FrameBufferBase, gop->Mode->FrameBufferSize);
+  entry_point(&config);
 
   /* All done! */
   Print(L"All done\n");
